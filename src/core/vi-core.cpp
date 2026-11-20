@@ -302,7 +302,7 @@ void VICore::triggerRandomEvent(const QString &forcedCategory)
     QVector<QPair<QString, QString>> activePool;
     for (const auto &u : m_users) {
         if (now - u.lastSeen <= 10 * 60 * 1000) {
-            activePool.append({u.key, u.displayName});
+            activePool.emplace_back(u.key, u.displayName);
         }
     }
 
@@ -311,7 +311,7 @@ void VICore::triggerRandomEvent(const QString &forcedCategory)
             scheduleNextScan();
             return;
         }
-        activePool.append({"viewer_one", "VIEWER_ONE"});
+        activePool.emplace_back(QStringLiteral("viewer_one"), QStringLiteral("VIEWER_ONE"));
     }
 
     QVector<QPair<QString, QString>> candidates;
