@@ -1,9 +1,6 @@
 name: Build obs-ktotakoyben-vi (Windows x64)
 
 on:
-  push:
-    branches: [ main, master ]
-  pull_request:
   workflow_dispatch:
 
 jobs:
