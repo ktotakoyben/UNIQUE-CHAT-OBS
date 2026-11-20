@@ -85,7 +85,7 @@ jobs:
       - name: Configure CMake
         shell: pwsh
         run: |
-          cmake -S . -B build -G "Visual Studio 17 2022" -A x64 `
+          cmake -S . -B build -A x64 `
             -DOBS_SDK_DIR="$env:OBS_SDK_DIR" `
             -DCMAKE_PREFIX_PATH="$env:Qt6_DIR"
 
