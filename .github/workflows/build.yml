@@ -1,0 +1,114 @@
+name: Build obs-ktotakoyben-vi (Windows x64)
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Qt 6.6.3 (MSVC x64)
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: '6.6.3'
+          host: 'windows'
+          target: 'desktop'
+          arch: 'win64_msvc2019_64'
+
+      - name: Prepare OBS Studio 30.2.3 SDK (Headers + Import Libs)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $obsVer = "30.2.3"
+          $sdkDir = "$env:RUNNER_TEMP\obs-sdk"
+          New-Item -ItemType Directory -Force -Path "$sdkDir\include", "$sdkDir\lib" | Out-Null
+
+          Write-Host "Downloading OBS Studio $obsVer binaries..."
+          $binUrl = "https://github.com/obsproject/obs-studio/releases/download/$obsVer/OBS-Studio-$obsVer-Windows.zip"
+          Invoke-WebRequest -Uri $binUrl -OutFile "$env:RUNNER_TEMP\obs-bin.zip"
+          Expand-Archive -Path "$env:RUNNER_TEMP\obs-bin.zip" -DestinationPath "$env:RUNNER_TEMP\obs-bin" -Force
+
+          Write-Host "Downloading OBS Studio $obsVer source headers..."
+          $srcUrl = "https://github.com/obsproject/obs-studio/archive/refs/tags/$obsVer.zip"
+          Invoke-WebRequest -Uri $srcUrl -OutFile "$env:RUNNER_TEMP\obs-src.zip"
+          Expand-Archive -Path "$env:RUNNER_TEMP\obs-src.zip" -DestinationPath "$env:RUNNER_TEMP\obs-src" -Force
+
+          $srcRoot = "$env:RUNNER_TEMP\obs-src\obs-studio-$obsVer"
+          Copy-Item -Path "$srcRoot\libobs\*" -Destination "$sdkDir\include" -Recurse -Force
+
+          $feHeader = Get-ChildItem -Path $srcRoot -Filter "obs-frontend-api.h" -Recurse | Select-Object -First 1
+          Copy-Item -Path $feHeader.FullName -Destination "$sdkDir\include\obs-frontend-api.h" -Force
+
+          @"
+          #pragma once
+          #define OBS_VERSION "$obsVer"
+          #define OBS_DATA_PATH "../../data"
+          #define OBS_INSTALL_PREFIX ""
+          #define OBS_PLUGIN_DESTINATION "obs-plugins/64bit"
+          #define OBS_RELATIVE_PREFIX "../../"
+          #define OBS_RELEASE_CANDIDATE 0
+          #define OBS_BETA 0
+          "@ | Out-File -FilePath "$sdkDir\include\obsconfig.h" -Encoding ascii
+
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          $vsPath = & $vswhere -latest -property installationPath
+          $vcVars = Join-Path $vsPath "VC\Auxiliary\Build\vcvars64.bat"
+
+          function Generate-ImportLib($dllPath, $libName) {
+            $defPath = "$sdkDir\lib\$libName.def"
+            $libPath = "$sdkDir\lib\$libName.lib"
+            $dumpOut = cmd /c "`"$vcVars`" >nul && dumpbin /EXPORTS `"$dllPath`""
+            $exports = @("LIBRARY $libName", "EXPORTS")
+            $inTable = $false
+            foreach ($line in $dumpOut) {
+              if ($line -match "^\s+ordinal\s+hint\s+RVA\s+name") { $inTable = $true; continue }
+              if ($inTable -and $line -match "^\s*Summary") { break }
+              if ($inTable -and $line -match "^\s+\d+\s+[0-9A-Fa-f]+\s+[0-9A-Fa-f]+\s+(\S+)") {
+                $sym = $matches[1]
+                if ($sym -notmatch "^\[") { $exports += "  $sym" }
+              }
+            }
+            $exports | Out-File -FilePath $defPath -Encoding ascii
+            cmd /c "`"$vcVars`" >nul && lib /NOLOGO /MACHINE:X64 /DEF:`"$defPath`" /OUT:`"$libPath`""
+            if (-not (Test-Path $libPath)) { throw "Failed to generate $libPath" }
+          }
+
+          Generate-ImportLib "$env:RUNNER_TEMP\obs-bin\bin\64bit\obs.dll" "obs"
+          Generate-ImportLib "$env:RUNNER_TEMP\obs-bin\bin\64bit\obs-frontend-api.dll" "obs-frontend-api"
+
+          echo "OBS_SDK_DIR=$sdkDir" >> $env:GITHUB_ENV
+
+      - name: Configure CMake
+        shell: pwsh
+        run: |
+          cmake -S . -B build -G "Visual Studio 17 2022" -A x64 `
+            -DOBS_SDK_DIR="$env:OBS_SDK_DIR" `
+            -DCMAKE_PREFIX_PATH="$env:Qt6_DIR"
+
+      - name: Build Plugin (Release)
+        shell: pwsh
+        run: |
+          cmake --build build --config Release --parallel
+
+      - name: Package OBS Plugin
+        shell: pwsh
+        run: |
+          $pkg = "package\obs-ktotakoyben-vi-windows-x64"
+          New-Item -ItemType Directory -Force -Path "$pkg\obs-plugins\64bit" | Out-Null
+          New-Item -ItemType Directory -Force -Path "$pkg\data\obs-plugins\obs-ktotakoyben-vi" | Out-Null
+
+          Copy-Item -Path "build\Release\obs-ktotakoyben-vi.dll" -Destination "$pkg\obs-plugins\64bit\" -Force
+          Copy-Item -Path "data\*" -Destination "$pkg\data\obs-plugins\obs-ktotakoyben-vi\" -Recurse -Force
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: obs-ktotakoyben-vi-windows-x64
+          path: package/obs-ktotakoyben-vi-windows-x64
