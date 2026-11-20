@@ -1,0 +1,78 @@
+uniform float4x4 ViewProj;
+uniform texture2d image;
+uniform float2 resolution;
+uniform float corner_radius;
+uniform float border_thickness;
+uniform float4 border_color;
+uniform float4 bg_color;
+uniform float glow_strength;
+uniform float has_image;
+
+sampler_state textureSampler {
+	Filter    = Linear;
+	AddressU  = Clamp;
+	AddressV  = Clamp;
+};
+
+struct VertData {
+	float4 pos : POSITION;
+	float2 uv  : TEXCOORD0;
+};
+
+VertData VSDefault(VertData v_in)
+{
+	VertData v_out;
+	v_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
+	v_out.uv  = v_in.uv;
+	return v_out;
+}
+
+float sdRoundedBox(float2 p, float2 b, float r)
+{
+	float2 q = abs(p) - b + r;
+	return min(max(q.x, q.y), 0.0) + length(max(q, 0.0)) - r;
+}
+
+float4 PSMain(VertData v_in) : TARGET
+{
+	float2 px = v_in.uv * resolution;
+	float2 halfSize = resolution * 0.5;
+	float2 centered = px - halfSize;
+
+	float pad = 4.0;
+	float r = clamp(corner_radius, 0.0, min(halfSize.x, halfSize.y) - pad);
+	float d = sdRoundedBox(centered, halfSize - pad, r);
+
+	// Smooth interior mask
+	float insideMask = 1.0 - smoothstep(-1.0, 0.5, d);
+
+	// Sample source or background
+	float4 content = bg_color;
+	if (has_image > 0.5) {
+		float4 imgCol = image.Sample(textureSampler, v_in.uv);
+		content = lerp(bg_color, imgCol, imgCol.a);
+	}
+	content.a *= insideMask;
+
+	// Crisp border
+	float bThick = max(1.0, border_thickness);
+	float borderMask = (1.0 - smoothstep(0.0, 1.0, abs(d) - bThick * 0.5)) * border_color.a;
+
+	// Soft cyber-tech glow
+	float glow = exp(-abs(d) * 0.28) * glow_strength * 0.55;
+
+	float4 outCol = content;
+	outCol.rgb = lerp(outCol.rgb, border_color.rgb, clamp(borderMask + glow * 0.45, 0.0, 1.0));
+	outCol.a = max(outCol.a, clamp(borderMask + glow * border_color.a, 0.0, 1.0));
+
+	return outCol;
+}
+
+technique Draw
+{
+	pass
+	{
+		vertex_shader = VSDefault(v_in);
+		pixel_shader  = PSMain(v_in);
+	}
+}
